@@ -1,0 +1,230 @@
+version: '3.8'
+
+services:
+  # Victoria Metrics - TSDB
+  victoria-metrics:
+    container_name: vm-single
+    image: victoriametrics/victoria-metrics:v1.97.0
+    ports:
+      - "8428:8428"
+    command:
+      - '-storageDataPath=/victoria-metrics-data'
+      - '-retentionPeriod=30d'
+      - '-search.maxUniqueTimeseries=1000000'
+    volumes:
+      - vm-data:/victoria-metrics-data
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # Victoria Metrics Agent - Scraper
+  vmagent:
+    container_name: vmagent
+    image: victoriametrics/vmagent:v1.97.0
+    ports:
+      - "8429:8429"
+    command:
+      - '-promscrape.config=/etc/prometheus/prometheus.yml'
+      - '-remoteWrite.url=http://victoria-metrics:8428/api/v1/write'
+      - '-promscrape.maxScrapeSize=32MB'
+      - '-promscrape.config.strictParse=false'
+    volumes:
+      - ./config/prometheus-config.yml:/etc/prometheus/prometheus.yml:ro
+      - vmagent-data:/vmagent-data
+      - /var/run/docker.sock:/var/run/docker.sock:ro   # Docker SD — auto-discover containers
+    networks:
+      - observability
+    depends_on:
+      - victoria-metrics
+    restart: unless-stopped
+
+  # Alertmanager
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.27.0
+    ports:
+      - "9093:9093"
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    volumes:
+      - ./config/alertmanager-config.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # VMAlert - Alert Rules Evaluator
+  vmalert:
+    container_name: vmalert
+    image: victoriametrics/vmalert:v1.97.0
+    ports:
+      - "8880:8880"
+    command:
+      - '-datasource.url=http://victoria-metrics:8428'
+      - '-notifier.url=http://alertmanager:9093'
+      - '-rule=/etc/alerts/*.yml'
+      - '-external.url=http://localhost:8880'
+    volumes:
+      - ./config/alerts:/etc/alerts:ro
+    networks:
+      - observability
+    depends_on:
+      - victoria-metrics
+      - alertmanager
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:10.2.3
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    networks:
+      - observability
+    depends_on:
+      - victoria-metrics
+    restart: unless-stopped
+
+  # Sample Application (for testing metrics)
+  node-exporter:
+    container_name: node-exporter
+    image: prom/node-exporter:v1.7.0
+    ports:
+      - "9100:9100"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # Redis for Backend API caching
+  redis:
+    container_name: visibility-redis
+    image: redis:alpine
+    ports:
+      - "6380:6379"
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # Backend API
+  backend:
+    container_name: visibility-api
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - VM_URL=http://victoria-metrics:8428
+      - REDIS_HOST=visibility-redis
+      - REDIS_PORT=6379
+      - LOKI_URL=http://loki:3100
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=visibility-api
+      - DEPLOYMENT_ENV=docker-compose
+    networks:
+      - observability
+    depends_on:
+      - victoria-metrics
+      - redis
+      - loki
+      - otel-collector
+    restart: unless-stopped
+
+  # Frontend UI
+  frontend:
+    container_name: visibility-ui
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8001
+    networks:
+      - observability
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Loki — log aggregation (queried by Holmes for RCA)
+  loki:
+    container_name: loki
+    image: grafana/loki:2.9.4
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./config/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # Promtail — ships Docker container logs to Loki
+  promtail:
+    container_name: promtail
+    image: grafana/promtail:2.9.4
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - observability
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  # ── Jaeger — distributed tracing backend + UI ───────────────────────────
+  jaeger:
+    container_name: jaeger
+    image: jaegertracing/all-in-one:1.55
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=memory
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14268:14268"  # Legacy HTTP collector
+    networks:
+      - observability
+    restart: unless-stopped
+
+  # ── OpenTelemetry Collector — traces → Jaeger, OTEL metrics → VictoriaMetrics ──
+  otel-collector:
+    container_name: otel-collector
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    command: ["--config=/etc/otel-collector/config.yml"]
+    volumes:
+      - ./config/otel-collector-config.yml:/etc/otel-collector/config.yml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8888"   # Collector self-monitoring metrics (8889 on host)
+      - "13133:13133" # Health-check endpoint
+    networks:
+      - observability
+    depends_on:
+      - victoria-metrics
+      - jaeger
+    restart: unless-stopped
+
+volumes:
+  vm-data:
+  vmagent-data:
+  alertmanager-data:
+  grafana-data:
+  loki-data:
+
+networks:
+  observability:
+    driver: bridge

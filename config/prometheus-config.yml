@@ -1,0 +1,95 @@
+global:
+  scrape_interval: 30s
+  external_labels:
+    cluster: 'local-docker'
+    environment: 'development'
+
+scrape_configs:
+  # Victoria Metrics itself
+  - job_name: 'victoria-metrics'
+    static_configs:
+      - targets: ['victoria-metrics:8428']
+        labels:
+          service: 'victoria-metrics'
+
+  # VMAgent
+  - job_name: 'vmagent'
+    static_configs:
+      - targets: ['vmagent:8429']
+        labels:
+          service: 'vmagent'
+
+  # VMAlert
+  - job_name: 'vmalert'
+    static_configs:
+      - targets: ['vmalert:8880']
+        labels:
+          service: 'vmalert'
+
+  # Alertmanager
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          service: 'alertmanager'
+
+  # Node Exporter
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          service: 'node-exporter'
+          instance: 'docker-host'
+
+  # Backend API
+  - job_name: 'visibility-api'
+    static_configs:
+      - targets: ['backend:8000']
+        labels:
+          service: 'visibility-api'
+
+  # ── OTEL Collector self-monitoring ──────────────────────────────
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+        labels:
+          service: 'otel-collector'
+
+  # ── Jaeger metrics ───────────────────────────────────────
+  - job_name: 'jaeger'
+    static_configs:
+      - targets: ['jaeger:14269']
+        labels:
+          service: 'jaeger'
+
+  # ── Kubernetes-style Docker service discovery ──────────────────────
+  # Any container gains automatic metric scraping by setting these labels:
+  #   prometheus.io/scrape: "true"
+  #   prometheus.io/port:   "<metrics-port>"
+  #   prometheus.io/path:   "/metrics"  (optional, default /metrics)
+  - job_name: 'docker-discovery'
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+    relabel_configs:
+      # Only scrape containers that have opted in
+      - source_labels: ['__meta_docker_container_label_prometheus_io_scrape']
+        regex: 'true'
+        action: keep
+      # Build host:port from container name + label
+      - source_labels:
+          - '__meta_docker_container_name'
+          - '__meta_docker_container_label_prometheus_io_port'
+        regex: '/(.*);(.*)'
+        replacement: '${1}:${2}'
+        target_label: '__address__'
+      # Custom metrics path
+      - source_labels: ['__meta_docker_container_label_prometheus_io_path']
+        regex: '(.+)'
+        target_label: '__metrics_path__'
+      # Service label from compose service name
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'job'
+      # Instance from container name
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'instance'

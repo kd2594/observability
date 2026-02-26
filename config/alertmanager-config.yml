@@ -1,0 +1,40 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: 'default'
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  routes:
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+    - match:
+        severity: warning
+      receiver: 'default'
+
+receivers:
+  - name: 'default'
+    webhook_configs:
+      - url: 'http://backend:8000/webhook/alerts'
+        send_resolved: true
+      # Robusta receives all alerts — triggers playbooks + Holmes RCA
+      - url: 'http://backend:8000/webhook/robusta'
+        send_resolved: true
+
+  - name: 'critical-alerts'
+    webhook_configs:
+      - url: 'http://backend:8000/webhook/alerts/critical'
+        send_resolved: true
+      # Critical alerts always trigger Robusta + Holmes immediately
+      - url: 'http://backend:8000/webhook/robusta'
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']

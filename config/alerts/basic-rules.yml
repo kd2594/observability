@@ -1,0 +1,39 @@
+groups:
+  - name: local_dev_alerts
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} on {{ $labels.instance }} has been down for more than 2 minutes."
+
+      - alert: HighScrapeFailureRate
+        expr: rate(scrape_samples_scraped[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High scrape failure rate for {{ $labels.job }}"
+          description: "Job {{ $labels.job }} has not collected any samples in the last 5 minutes."
+
+      - alert: VMAgentHighMemoryUsage
+        expr: process_resident_memory_bytes{job="vmagent"} > 500 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "VMAgent high memory usage"
+          description: "VMAgent is using {{ $value | humanize }}B of memory."
+          
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.job }}"
+          description: "{{ $labels.job }} CPU usage is above 80%"

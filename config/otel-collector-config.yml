@@ -1,0 +1,74 @@
+# OpenTelemetry Collector configuration
+# Receives traces + metrics from services (OTLP), forwards:
+#   Traces  → Jaeger (via OTLP gRPC)
+#   Metrics → VictoriaMetrics (via Prometheus remote-write)
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins: ["*"]
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Enrich every span/metric with cluster + environment metadata
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: "docker-compose"
+        action: upsert
+      - key: cluster
+        value: "local-docker"
+        action: upsert
+
+exporters:
+  # Traces → Jaeger (OTLP gRPC, plain-text within Docker network)
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # OTLP metrics from SDK → VictoriaMetrics
+  prometheusremotewrite/victoria:
+    endpoint: http://victoria-metrics:8428/api/v1/write
+    tls:
+      insecure: true
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Debug logging (warn level — quiet in production)
+  logging:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+service:
+  extensions: [health_check, pprof]
+  pipelines:
+    traces:
+      receivers:  [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters:  [otlp/jaeger]
+    metrics:
+      receivers:  [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters:  [prometheusremotewrite/victoria]
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
