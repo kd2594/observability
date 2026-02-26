@@ -1,4 +1,4 @@
-# 🎉 FlexAI Visibility Platform - Running Successfully!
+# 🎉 FlexAI Visibility Platform — Running Successfully!
 
 ## ✅ What's Running
 
@@ -13,6 +13,22 @@ All services are up and operational:
 | **Grafana** | http://localhost:3001 | ✅ Running |
 | **Alertmanager** | http://localhost:9093 | ✅ Running |
 | **VMAlert** | http://localhost:8880 | ✅ Running |
+| **Ollama (LLM)** | http://localhost:11434 | ✅ Running on host |
+
+### 🤖 Active AI Engine
+```bash
+# Check which LLM engine is live
+curl -s http://localhost:8001/api/ai/analyze | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('engine'), '| health:', d.get('overall_health_score'))"
+# e.g.: HolmesGPT/ollama (llama3.2) | health: 87.0
+```
+
+| Engine shown | Meaning |
+|---|---|
+| `HolmesGPT/ollama (llama3.2)` | LLM active — full reasoning per anomaly |
+| `HolmesGPT/groq (...)` | Groq cloud LLM active |
+| `HolmesGPT/openai (...)` | OpenAI active |
+| `RuleBasedDetector` | LLM unreachable — threshold fallback active |
 
 ## 📊 Current Metrics
 
@@ -61,6 +77,21 @@ curl http://localhost:8001/api/metrics/cpu | python3 -m json.tool
 curl http://localhost:8001/api/metrics/memory | python3 -m json.tool
 ```
 
+### Test HolmesGPT AI Endpoints
+```bash
+# Full AI fleet analysis (anomalies + health score + insights + engine)
+curl http://localhost:8001/api/ai/analyze | python3 -m json.tool
+
+# Anomalies only
+curl http://localhost:8001/api/ai/anomalies | python3 -m json.tool
+
+# LLM-generated insights
+curl http://localhost:8001/api/ai/insights | python3 -m json.tool
+
+# Anomaly trends (last 24 h)
+curl 'http://localhost:8001/api/ai/trends?hours=24' | python3 -m json.tool
+```
+
 ### Query Victoria Metrics Directly
 ```bash
 # Check service health
@@ -105,13 +136,22 @@ The dashboard (http://localhost:3000) shows:
 
 ### Start Everything
 ```bash
-cd /Users/krishnadamarla/Library/CloudStorage/GoogleDrive-krishna.damarla@flex.ai/My\ Drive/GitHub\ Code/infra-main/visibility-platform
+cd visibility-platform
 ./start.sh
+# On first run: automatically calls setup-llm.sh to install Ollama + pull model
 ```
 
 ### Stop Everything
 ```bash
 ./stop.sh
+```
+
+### Switch LLM Provider
+```bash
+./setup-llm.sh                    # Ollama (local, free, default)
+./setup-llm.sh --provider groq    # Groq free cloud
+./setup-llm.sh --provider openai  # OpenAI (requires billing)
+./setup-llm.sh --model mistral    # Different Ollama model
 ```
 
 ### Restart a Specific Service
@@ -126,11 +166,14 @@ docker-compose restart vmagent    # Restart scraper
 docker-compose logs -f backend
 docker-compose logs -f vmagent
 docker-compose logs -f victoria-metrics
+
+# HolmesGPT-specific log lines
+docker logs visibility-api 2>&1 | grep -i holmesgpt
 ```
 
 ### Rebuild After Code Changes
 ```bash
-# Rebuild backend
+# Rebuild backend (needed after ai_agent.py changes)
 docker-compose up -d --build backend
 
 # Rebuild frontend
@@ -208,26 +251,46 @@ docker-compose restart backend
 ## 🎓 Next Steps
 
 ### Immediate Actions:
-1. ✅ Explore the dashboard at http://localhost:3000
+1. ✅ Explore the dashboard at http://localhost:3000 — check the **AI Insights** tab
 2. ✅ Try the API docs at http://localhost:8001/docs
-3. ✅ Create custom Grafana dashboards at http://localhost:3001
+3. ✅ Run `curl -s http://localhost:8001/api/ai/analyze | python3 -m json.tool` to see live HolmesGPT output
+4. ✅ Create custom Grafana dashboards at http://localhost:3001
 
 ### Advanced:
-1. **Add GPU Monitoring**: Include DCGM exporter metrics
-2. **Custom Dashboards**: Create specific views in Grafana
-3. **Alert Routing**: Configure Slack/PagerDuty webhooks
-4. **Cost Analytics**: Integrate cloud provider APIs
-5. **Production Integration**: Connect to real K8s clusters
+1. **Switch LLM Provider**: `./setup-llm.sh --provider groq` for faster cloud inference
+2. **Upgrade Model**: `./setup-llm.sh --model llama3.3` for larger context window
+3. **Add GPU Monitoring**: Include DCGM exporter metrics in `config/prometheus-config.yml`
+4. **Alert Routing**: Configure Slack/PagerDuty webhooks in `config/alertmanager-config.yml`
+5. **Production Integration**: Update `VM_URL` in `docker-compose.yml` to point at real clusters
 
 ## 📚 Documentation
 
 Full documentation available in:
-- `OBSERVABILITY_ARCHITECTURE.md` - Complete architecture explanation
-- `LOCAL_OBSERVABILITY_SETUP.md` - Detailed setup guide
-- `VISIBILITY_UI_PROTOTYPE.md` - UI development guide
-- `README.md` - Quick start guide
+- `README.md` — Quick start + LLM configuration reference
+- `AI_FEATURES.md` — HolmesGPT architecture, detection layers, API reference
+- `setup-llm.sh` — Automated LLM setup script (Ollama · Groq · OpenAI)
+- `OBSERVABILITY_ARCHITECTURE.md` — Complete stack architecture
 
 ## 🐛 Troubleshooting
+
+### HolmesGPT falling back to RuleBasedDetector?
+```bash
+# See what engine is active and why
+docker logs visibility-api 2>&1 | grep -i holmesgpt
+
+# Verify Ollama is running and model is ready
+curl http://localhost:11434/api/tags
+ollama list
+
+# If Ollama isn't running, start it
+ollama serve &
+
+# Pull model if missing
+ollama pull llama3.2
+
+# Re-run full automated setup
+./setup-llm.sh
+```
 
 ### Frontend not loading?
 ```bash
@@ -253,13 +316,16 @@ curl 'http://localhost:8428/api/v1/query?query=up'
 
 ## 🎉 Success!
 
-Your FlexAI Visibility Platform is fully operational! You now have:
-- ✅ Real-time metrics collection
-- ✅ Beautiful dashboard UI
-- ✅ REST API for integrations
-- ✅ Alert management system
+Your FlexAI Visibility Platform is fully operational with:
+- ✅ HolmesGPT LLM anomaly detection (Ollama / Groq / OpenAI)
+- ✅ Rule-based fallback — always on, zero dependencies
+- ✅ Real-time metrics collection (Victoria Metrics)
+- ✅ Beautiful dashboard UI with AI Insights tab
+- ✅ REST API + Swagger docs
+- ✅ Alert management (Alertmanager + VMAlert)
 - ✅ Time-series database (30 days retention)
+- ✅ One-command setup for new users (`./setup-llm.sh`)
 
-**Start exploring at:** http://localhost:3000
+**Start exploring at:** http://localhost:3000 → **AI Insights** tab
 
-Enjoy your monitoring platform! 🚀
+Enjoy your AI-powered monitoring platform! 🚀
