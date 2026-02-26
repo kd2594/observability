@@ -32,6 +32,45 @@ else
     exit 1
 fi
 
+# ── LLM / HolmesGPT bootstrap ────────────────────────────────────────────────
+echo ""
+echo "🤖 Checking HolmesGPT / LLM configuration..."
+
+if [ ! -f ".env" ]; then
+    echo -e "${YELLOW}⚠${NC}  No .env found — running LLM setup (first-time only)..."
+    bash "$(dirname "$0")/setup-llm.sh"
+else
+    # .env exists — source it quietly to read LLM_PROVIDER
+    set +e
+    # shellcheck disable=SC1091
+    source <(grep -v '^#' .env | grep -v '^$' | sed 's/^/export /')
+    set -e
+
+    PROVIDER="${LLM_PROVIDER:-ollama}"
+
+    if [ "$PROVIDER" = "ollama" ]; then
+        if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+            echo -e "${GREEN}✓${NC} Ollama is running (provider: ollama, model: ${HOLMES_MODEL:-llama3.2})"
+        else
+            echo -e "${YELLOW}⚠${NC}  Ollama not running — starting it..."
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+            for i in $(seq 1 15); do
+                if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
+                    echo -e "${GREEN}✓${NC} Ollama started"
+                    break
+                fi
+                sleep 1
+                if [ "$i" -eq 15 ]; then
+                    echo -e "${YELLOW}⚠${NC}  Ollama did not start — will use RuleBasedDetector fallback"
+                fi
+            done
+        fi
+    else
+        echo -e "${GREEN}✓${NC} LLM provider: $PROVIDER (model: ${HOLMES_MODEL:-default})"
+    fi
+fi
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Stop any existing containers
 echo ""
 echo "🛑 Stopping any existing containers..."
