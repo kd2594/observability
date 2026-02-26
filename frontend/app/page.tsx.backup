@@ -1,0 +1,385 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import {
+  Box,
+  Container,
+  Grid,
+  Paper,
+  Typography,
+  Card,
+  CardContent,
+  Chip,
+  LinearProgress,
+  Alert,
+  AppBar,
+  Toolbar,
+  IconButton,
+} from '@mui/material';
+import {
+  CheckCircle as CheckCircleIcon,
+  Error as ErrorIcon,
+  Warning as WarningIcon,
+  Refresh as RefreshIcon,
+} from '@mui/icons-material';
+import useSWR from 'swr';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+interface Cluster {
+  name: string;
+  status: 'healthy' | 'down' | 'degraded';
+  services_up: number;
+  services_down: number;
+  last_seen: string;
+  environment: string;
+}
+
+interface ClusterMetrics {
+  total_services: number;
+  services_up: number;
+  services_down: number;
+  cpu_usage_percent: number;
+  memory_usage_mb: number;
+  scrape_duration: number;
+  health_percentage: number;
+}
+
+interface Service {
+  cluster: string;
+  job: string;
+  instance: string;
+  status: string;
+  timestamp: string;
+}
+
+export default function DashboardPage() {
+  const { data: clusters, error: clustersError, mutate: refreshClusters } = useSWR<Cluster[]>(
+    `${API_BASE}/api/clusters`,
+    fetcher,
+    { refreshInterval: 30000 }
+  );
+
+  const [selectedCluster, setSelectedCluster] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (clusters && clusters.length > 0 && !selectedCluster) {
+      setSelectedCluster(clusters[0].name);
+    }
+  }, [clusters, selectedCluster]);
+
+  const { data: metrics } = useSWR<ClusterMetrics>(
+    selectedCluster ? `${API_BASE}/api/clusters/${selectedCluster}/metrics` : null,
+    fetcher,
+    { refreshInterval: 15000 }
+  );
+
+  const { data: servicesData } = useSWR<{ services: Service[]; total: number }>(
+    `${API_BASE}/api/services/all`,
+    fetcher,
+    { refreshInterval: 15000 }
+  );
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'healthy':
+        return <CheckCircleIcon color="success" />;
+      case 'down':
+        return <ErrorIcon color="error" />;
+      case 'degraded':
+        return <WarningIcon color="warning" />;
+      default:
+        return <WarningIcon />;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'healthy':
+        return 'success';
+      case 'down':
+        return 'error';
+      case 'degraded':
+        return 'warning';
+      default:
+        return 'default';
+    }
+  };
+
+  if (clustersError) {
+    return (
+      <Container>
+        <Alert severity="error">
+          Failed to connect to API. Make sure the backend is running at {API_BASE}
+        </Alert>
+      </Container>
+    );
+  }
+
+  if (!clusters) {
+    return (
+      <Container sx={{ py: 4 }}>
+        <Typography variant="h5" gutterBottom>
+          Loading...
+        </Typography>
+        <LinearProgress />
+      </Container>
+    );
+  }
+
+  return (
+    <>
+      <AppBar position="static" elevation={1}>
+        <Toolbar>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+            FlexAI Platform Health Dashboard
+          </Typography>
+          <IconButton color="inherit" onClick={() => refreshClusters()}>
+            <RefreshIcon />
+          </IconButton>
+        </Toolbar>
+      </AppBar>
+
+      <Container maxWidth="xl" sx={{ py: 4 }}>
+        <Typography variant="h4" gutterBottom>
+          Real-time Observability Platform
+        </Typography>
+        
+        <Typography variant="subtitle1" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
+          Monitoring {clusters.length} cluster(s) • {servicesData?.total || 0} services
+        </Typography>
+
+        {/* Global Overview */}
+        <Box sx={{ my: 4 }}>
+          <Typography variant="h5" gutterBottom>
+            Global Overview
+          </Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={3}>
+              <Card elevation={3}>
+                <CardContent>
+                  <Typography variant="h3" color="primary">
+                    {clusters.length}
+                  </Typography>
+                  <Typography color="text.secondary" variant="h6">
+                    Total Clusters
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card elevation={3}>
+                <CardContent>
+                  <Typography variant="h3" color="success.main">
+                    {clusters.filter((c) => c.status === 'healthy').length}
+                  </Typography>
+                  <Typography color="text.secondary" variant="h6">
+                    Healthy
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card elevation={3}>
+                <CardContent>
+                  <Typography variant="h3" color="warning.main">
+                    {clusters.filter((c) => c.status === 'degraded').length}
+                  </Typography>
+                  <Typography color="text.secondary" variant="h6">
+                    Degraded
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <Card elevation={3}>
+                <CardContent>
+                  <Typography variant="h3" color="error.main">
+                    {clusters.filter((c) => c.status === 'down').length}
+                  </Typography>
+                  <Typography color="text.secondary" variant="h6">
+                    Down
+                  </Typography>
+                </CardContent>
+              </Card>
+            </Grid>
+          </Grid>
+        </Box>
+
+        {/* Services Overview */}
+        {servicesData && (
+          <Box sx={{ my: 4 }}>
+            <Typography variant="h5" gutterBottom>
+              Services Status
+            </Typography>
+            <Paper sx={{ p: 3 }}>
+              <Grid container spacing={3}>
+                {servicesData.services.slice(0, 10).map((service, idx) => (
+                  <Grid item xs={12} md={6} lg={4} key={idx}>
+                    <Box display="flex" alignItems="center" gap={1}>
+                      {service.status === 'up' ? (
+                        <CheckCircleIcon color="success" fontSize="small" />
+                      ) : (
+                        <ErrorIcon color="error" fontSize="small" />
+                      )}
+                      <Box>
+                        <Typography variant="body2" fontWeight="bold">
+                          {service.job}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {service.cluster} • {service.instance}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  </Grid>
+                ))}
+              </Grid>
+            </Paper>
+          </Box>
+        )}
+
+        {/* Cluster List */}
+        <Box sx={{ my: 4 }}>
+          <Typography variant="h5" gutterBottom>
+            Clusters
+          </Typography>
+          <Grid container spacing={2}>
+            {clusters.map((cluster) => (
+              <Grid item xs={12} md={6} lg={4} key={cluster.name}>
+                <Paper
+                  elevation={selectedCluster === cluster.name ? 8 : 2}
+                  sx={{
+                    p: 2,
+                    cursor: 'pointer',
+                    border:
+                      selectedCluster === cluster.name
+                        ? '2px solid #1976d2'
+                        : 'none',
+                    transition: 'all 0.3s',
+                    '&:hover': {
+                      elevation: 6,
+                      transform: 'translateY(-2px)',
+                    },
+                  }}
+                  onClick={() => setSelectedCluster(cluster.name)}
+                >
+                  <Box display="flex" alignItems="center" gap={1} mb={1}>
+                    {getStatusIcon(cluster.status)}
+                    <Typography variant="h6">{cluster.name}</Typography>
+                  </Box>
+                  <Box mb={1}>
+                    <Chip
+                      label={cluster.status}
+                      color={getStatusColor(cluster.status) as any}
+                      size="small"
+                      sx={{ mr: 1 }}
+                    />
+                    <Chip
+                      label={cluster.environment}
+                      size="small"
+                      variant="outlined"
+                    />
+                  </Box>
+                  <Typography variant="body2" color="text.secondary">
+                    Services: {cluster.services_up} up, {cluster.services_down} down
+                  </Typography>
+                  <Typography variant="caption" display="block" mt={1} color="text.secondary">
+                    Last seen: {new Date(cluster.last_seen).toLocaleString()}
+                  </Typography>
+                </Paper>
+              </Grid>
+            ))}
+          </Grid>
+        </Box>
+
+        {/* Selected Cluster Metrics */}
+        {selectedCluster && metrics && (
+          <Box sx={{ my: 4 }}>
+            <Typography variant="h5" gutterBottom>
+              {selectedCluster} - Detailed Metrics
+            </Typography>
+            <Grid container spacing={3}>
+              <Grid item xs={12} md={6}>
+                <Card elevation={3}>
+                  <CardContent>
+                    <Typography variant="h6" gutterBottom color="primary">
+                      Service Health
+                    </Typography>
+                    <Box mb={2}>
+                      <Typography variant="body2">
+                        Total Services: {metrics.total_services}
+                      </Typography>
+                      <Typography variant="body2">
+                        Running: {metrics.services_up} • Down: {metrics.services_down}
+                      </Typography>
+                    </Box>
+                    <Box mb={2}>
+                      <Typography variant="body2" gutterBottom>
+                        Health Score
+                      </Typography>
+                      <LinearProgress
+                        variant="determinate"
+                        value={metrics.health_percentage}
+                        sx={{ height: 10, borderRadius: 5 }}
+                        color={
+                          metrics.health_percentage > 90
+                            ? 'success'
+                            : metrics.health_percentage > 70
+                            ? 'warning'
+                            : 'error'
+                        }
+                      />
+                      <Typography variant="caption">
+                        {metrics.health_percentage.toFixed(1)}%
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <Card elevation={3}>
+                  <CardContent>
+                    <Typography variant="h6" gutterBottom color="primary">
+                      Resource Usage
+                    </Typography>
+                    <Box mb={2}>
+                      <Typography variant="body2">CPU Usage</Typography>
+                      <Typography variant="h5">
+                        {metrics.cpu_usage_percent.toFixed(2)}%
+                      </Typography>
+                    </Box>
+                    <Box mb={2}>
+                      <Typography variant="body2">Memory Usage</Typography>
+                      <Typography variant="h5">
+                        {metrics.memory_usage_mb.toFixed(0)} MB
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="body2">Avg Scrape Duration</Typography>
+                      <Typography variant="h6">
+                        {(metrics.scrape_duration * 1000).toFixed(2)} ms
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grid>
+            </Grid>
+          </Box>
+        )}
+
+        {/* Footer */}
+        <Box sx={{ mt: 6, mb: 2, textAlign: 'center' }}>
+          <Typography variant="body2" color="text.secondary">
+            FlexAI Visibility Platform • Connected to: {API_BASE}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Auto-refreshing every 15-30 seconds
+          </Typography>
+        </Box>
+      </Container>
+    </>
+  );
+}
